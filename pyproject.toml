@@ -1,0 +1,12 @@
+[project]
+name = "narrator"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "kokoro>=0.9.2",
+    "torch",
+    "numpy",
+    "huggingface-hub",
+    # 3.0.14 overflows inside spaCy's tokenizer. 3.0.13 matches the working reader.
+    "preshed==3.0.13",
+]

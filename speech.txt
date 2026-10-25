@@ -1,0 +1,3 @@
+This is a short sample speech.
+
+Replace this file with the text you want narrated. Blank lines stay as paragraph breaks. The script blends two voices and speaks at the speed set at the top of narrate.py.
