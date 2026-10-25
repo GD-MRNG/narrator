@@ -1,6 +1,6 @@
 # Narrator
 
-Reads `speech.txt` and writes a narrated MP3 to `outputs/speech.mp3`, using [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M).
+Reads `speech.txt` and writes numbered narrated MP3s to `outputs/`, using [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M).
 
 ## Quick start
 
@@ -9,7 +9,9 @@ brew install espeak-ng ffmpeg
 uv run narrate.py
 ```
 
-UV creates the virtual environment and installs Python dependencies on first run. The project is pinned to Python 3.13. Kokoro’s spaCy model fails on 3.14. Kokoro model weights and voices download from Hugging Face on first use (~300 MB, cached in `~/.cache/huggingface/` after that). Each run overwrites `outputs/speech.mp3`.
+UV creates the virtual environment and installs Python dependencies on first run. The project is pinned to Python 3.13. Kokoro’s spaCy model fails on 3.14. Kokoro model weights and voices download from Hugging Face on first use (~300 MB, cached in `~/.cache/huggingface/` after that).
+
+The script stays open. When `speech.txt` has text, it asks whether to generate the audio. Each yes writes the next file: `outputs/speech_0001.mp3`, then `outputs/speech_0002.mp3`, and so on. `n` skips and checks the file again, so you can edit `speech.txt` without restarting. `q` quits. Kokoro stays loaded for the session.
 
 ## Adjust the voice and speed
 

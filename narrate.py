@@ -1,4 +1,4 @@
-"""Read speech.txt and write a narrated MP3 to outputs/speech.mp3.
+"""Watch speech.txt and write numbered narrated MP3s.
 
 Usage:
     uv run narrate.py
@@ -25,14 +25,18 @@ KOKORO_REPO     = "hexgrad/Kokoro-82M"
 VOICE_PRIMARY   = "af_bella"   # base voice (American female)
 VOICE_SECONDARY = "am_adam"    # blend voice (American male)
 VOICE_MIX       = 0.8          # weight of primary; secondary = 1 - VOICE_MIX
-SPEED           = 1.0          # 1.0 normal, higher is faster, lower is slower
+SPEED           = 0.9         # 1.0 normal, higher is faster, lower is slower
 LANG_CODE       = "a"          # 'a' = American English
 SAMPLE_RATE     = 24_000       # Hz — fixed by Kokoro
 DEVICE          = "cpu"
 
 ROOT = Path(__file__).resolve().parent
 INPUT_PATH = ROOT / "speech.txt"
-OUTPUT_PATH = ROOT / "outputs" / "speech.mp3"
+OUTPUT_DIR = ROOT / "outputs"
+_SPEECH_FILE = re.compile(r"speech_(\d+)\.mp3$")
+
+_pipeline: KPipeline | None = None
+_voice: torch.Tensor | None = None
 
 # Split only at blank lines so a heading stays with the paragraph under it.
 _SPLIT_PATTERN = r"\n\n+"
@@ -64,10 +68,18 @@ def _load_voice() -> torch.Tensor:
     return primary * VOICE_MIX + secondary * (1.0 - VOICE_MIX)
 
 
-def _synthesize(text: str) -> np.ndarray:
+def _ensure_pipeline() -> tuple[KPipeline, torch.Tensor]:
+    global _pipeline, _voice
+    if _pipeline is not None and _voice is not None:
+        return _pipeline, _voice
     print("Loading Kokoro…")
-    pipeline = KPipeline(lang_code=LANG_CODE, repo_id=KOKORO_REPO, device=DEVICE)
-    voice = _load_voice()
+    _pipeline = KPipeline(lang_code=LANG_CODE, repo_id=KOKORO_REPO, device=DEVICE)
+    _voice = _load_voice()
+    return _pipeline, _voice
+
+
+def _synthesize(text: str) -> np.ndarray:
+    pipeline, voice = _ensure_pipeline()
 
     chunks: list[np.ndarray] = []
     print(f"Narrating at speed {SPEED}…")
@@ -101,32 +113,73 @@ def _encode_mp3(wav_path: Path, mp3_path: Path) -> None:
     )
 
 
+def _read_speech() -> str | None:
+    """Return cleaned speech, an empty string, or None if the file is missing."""
+    if not INPUT_PATH.is_file():
+        return None
+    return _clean(INPUT_PATH.read_text())
+
+
+def _next_output_path() -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    highest = 0
+    for path in OUTPUT_DIR.glob("speech_*.mp3"):
+        match = _SPEECH_FILE.fullmatch(path.name)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return OUTPUT_DIR / f"speech_{highest + 1:04d}.mp3"
+
+
+def _write_mp3(text: str, output_path: Path) -> None:
+    audio = _synthesize(text)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_path = Path(tmp.name)
+    try:
+        _write_wav(wav_path, audio)
+        _encode_mp3(wav_path, output_path)
+    finally:
+        wav_path.unlink(missing_ok=True)
+    print(f"Wrote {output_path}")
+
+
+def _ask(prompt: str, allowed: set[str]) -> str:
+    labels = ", ".join(sorted(allowed))
+    while True:
+        try:
+            raw = input(f"{prompt} ").strip().lower()
+        except EOFError:
+            print()
+            return "q"
+        if raw in allowed:
+            return raw
+        print(f"  Enter one of: {labels}")
+
+
 def main() -> None:
     if shutil.which("ffmpeg") is None:
         print("ffmpeg is required. Install it with: brew install ffmpeg", file=sys.stderr)
         sys.exit(1)
 
-    if not INPUT_PATH.is_file():
-        print(f"Missing {INPUT_PATH.name}. Add the speech text and run again.", file=sys.stderr)
-        sys.exit(1)
-
-    text = _clean(INPUT_PATH.read_text())
-    if not text:
-        print(f"{INPUT_PATH.name} is empty.", file=sys.stderr)
-        sys.exit(1)
-
-    audio = _synthesize(text)
-
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
+    print("Narrator. Edit speech.txt between takes. q quits.\n")
     try:
-        _write_wav(wav_path, audio)
-        _encode_mp3(wav_path, OUTPUT_PATH)
-    finally:
-        wav_path.unlink(missing_ok=True)
+        while True:
+            text = _read_speech()
+            if text is None:
+                choice = _ask(f"{INPUT_PATH.name} is missing. [c]heck again, [q]uit?", {"c", "q"})
+            elif not text:
+                choice = _ask(f"{INPUT_PATH.name} is empty. [c]heck again, [q]uit?", {"c", "q"})
+            else:
+                print(f"\n{INPUT_PATH.name} has text.")
+                choice = _ask("Generate the audio? [y]es, [n]o, [q]uit?", {"y", "n", "q"})
+                if choice == "y":
+                    _write_mp3(text, _next_output_path())
+            if choice == "q":
+                break
+    except KeyboardInterrupt:
+        print()
 
-    print(f"Wrote {OUTPUT_PATH}")
+    print("Goodbye.")
 
 
 if __name__ == "__main__":
