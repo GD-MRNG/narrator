@@ -15,13 +15,13 @@ UV creates the virtual environment and installs Python dependencies on first run
 
 ## Adjust the voice and speed
 
-Edit the variables at the top of `narrate.py`:
+Edit the variables at the top of `web.py`:
 
 ```python
 VOICE_PRIMARY   = "af_nicole"  # base voice
 VOICE_SECONDARY = "af_heart"   # blend voice
 VOICE_MIX       = 0.8          # 80% primary, 20% secondary
-SPEED           = 0.8          # 1.0 normal, higher is faster, lower is slower
+SPEED           = 0.9          # 1.0 normal, higher is faster, lower is slower
 ```
 
 `VOICE_MIX` is the weight of the primary voice. The secondary voice gets `1 - VOICE_MIX`. The two voice tensors are averaged once, then reused for the whole file.
