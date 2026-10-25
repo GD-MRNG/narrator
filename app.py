@@ -1,7 +1,7 @@
-"""Local page for typing a speech and playing the numbered MP3s.
+"""Local page for typing a titled speech and playing the MP3s.
 
 Usage:
-    uv run web.py
+    uv run app.py
 """
 
 from __future__ import annotations
@@ -23,7 +23,9 @@ from urllib.parse import unquote, urlparse
 import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 from kokoro import KPipeline
+from kokoro.model import KModel
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +43,7 @@ PORT = 8765
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "outputs"
-_SPEECH_FILE = re.compile(r"speech_(\d+)\.mp3$")
+_AUDIO_FILE = re.compile(r"[a-z0-9_]+\.mp3$")
 
 _pipeline: KPipeline | None = None
 _voice: torch.Tensor | None = None
@@ -104,11 +106,8 @@ PAGE = """<!DOCTYPE html>
       gap: 12px;
       padding: 20px 0;
     }
-    textarea {
-      flex: 1;
-      min-height: 0;
+    input[type="text"], textarea {
       width: 100%;
-      resize: none;
       border: 1px solid #ccc;
       border-radius: 6px;
       padding: 14px 16px;
@@ -118,7 +117,13 @@ PAGE = """<!DOCTYPE html>
       font-size: 16px;
       line-height: 1.5;
     }
-    textarea:focus {
+    input[type="text"] { flex: none; }
+    textarea {
+      flex: 1;
+      min-height: 0;
+      resize: none;
+    }
+    input[type="text"]:focus, textarea:focus {
       outline: 2px solid #111;
       border-color: #111;
     }
@@ -170,6 +175,7 @@ PAGE = """<!DOCTYPE html>
   <main>
     <section class="composer">
       <div class="wrap">
+        <input id="title" type="text" placeholder="Title" autocomplete="off" spellcheck="false">
         <textarea id="text" placeholder="Type the speech here."></textarea>
         <div class="actions">
           <p id="status" role="status"></p>
@@ -182,6 +188,7 @@ PAGE = """<!DOCTYPE html>
     </section>
   </main>
   <script>
+    const title = document.querySelector("#title");
     const text = document.querySelector("#text");
     const button = document.querySelector("#generate");
     const status = document.querySelector("#status");
@@ -189,20 +196,22 @@ PAGE = """<!DOCTYPE html>
     let busy = false;
 
     function syncButton() {
-      button.disabled = busy || text.value.trim().length === 0;
+      button.disabled = busy
+        || title.value.trim().length === 0
+        || text.value.trim().length === 0;
       button.textContent = busy ? "Generating…" : "Generate";
     }
 
     function clipView(clip) {
       const item = document.createElement("article");
       item.className = "clip";
-      const title = document.createElement("h2");
-      title.textContent = clip.name;
+      const heading = document.createElement("h2");
+      heading.textContent = clip.name;
       const audio = document.createElement("audio");
       audio.controls = true;
       audio.preload = "metadata";
       audio.src = clip.url;
-      item.append(title, audio);
+      item.append(heading, audio);
       return item;
     }
 
@@ -221,6 +230,14 @@ PAGE = """<!DOCTYPE html>
 
     button.addEventListener("click", async () => {
       if (busy) return;
+      if (!title.value.trim()) {
+        status.textContent = "Enter a title first.";
+        return;
+      }
+      if (!text.value.trim()) {
+        status.textContent = "Enter some text first.";
+        return;
+      }
       busy = true;
       status.textContent = "";
       syncButton();
@@ -228,7 +245,7 @@ PAGE = """<!DOCTYPE html>
         const response = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text.value }),
+          body: JSON.stringify({ title: title.value, text: text.value }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Could not generate audio.");
@@ -242,6 +259,7 @@ PAGE = """<!DOCTYPE html>
       }
     });
 
+    title.addEventListener("input", syncButton);
     text.addEventListener("input", syncButton);
     text.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !button.disabled) {
@@ -272,13 +290,22 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
+def _hub_file(filename: str) -> str:
+    """Resolve a Kokoro file from the local HF cache; download only if missing."""
+    try:
+        return hf_hub_download(KOKORO_REPO, filename, local_files_only=True)
+    except LocalEntryNotFoundError:
+        print(f"Downloading {filename} into local Hugging Face cache…", flush=True)
+        return hf_hub_download(KOKORO_REPO, filename)
+
+
 def _load_voice() -> torch.Tensor:
     primary = torch.load(
-        hf_hub_download(KOKORO_REPO, f"voices/{VOICE_PRIMARY}.pt"),
+        _hub_file(f"voices/{VOICE_PRIMARY}.pt"),
         weights_only=True,
     )
     secondary = torch.load(
-        hf_hub_download(KOKORO_REPO, f"voices/{VOICE_SECONDARY}.pt"),
+        _hub_file(f"voices/{VOICE_SECONDARY}.pt"),
         weights_only=True,
     )
     return primary * VOICE_MIX + secondary * (1.0 - VOICE_MIX)
@@ -288,8 +315,13 @@ def _ensure_pipeline() -> tuple[KPipeline, torch.Tensor]:
     global _pipeline, _voice
     if _pipeline is not None and _voice is not None:
         return _pipeline, _voice
-    print("Loading Kokoro…")
-    _pipeline = KPipeline(lang_code=LANG_CODE, repo_id=KOKORO_REPO, device=DEVICE)
+    print("Loading Kokoro from local cache…", flush=True)
+    model = KModel(
+        repo_id=KOKORO_REPO,
+        config=_hub_file("config.json"),
+        model=_hub_file(KModel.MODEL_NAMES[KOKORO_REPO]),
+    ).to(DEVICE).eval()
+    _pipeline = KPipeline(lang_code=LANG_CODE, repo_id=KOKORO_REPO, model=model, device=DEVICE)
     _voice = _load_voice()
     return _pipeline, _voice
 
@@ -329,14 +361,24 @@ def _encode_mp3(wav_path: Path, mp3_path: Path) -> None:
     )
 
 
-def _next_output_path() -> Path:
+def _snake_case(title: str) -> str:
+    """Turn a title into a safe snake_case stem for an MP3 filename."""
+    slug = title.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", slug)
+    return slug.strip("_")
+
+
+def _output_path(slug: str) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    highest = 0
-    for path in OUTPUT_DIR.glob("speech_*.mp3"):
-        match = _SPEECH_FILE.fullmatch(path.name)
-        if match:
-            highest = max(highest, int(match.group(1)))
-    return OUTPUT_DIR / f"speech_{highest + 1:04d}.mp3"
+    candidate = OUTPUT_DIR / f"{slug}.mp3"
+    if not candidate.exists():
+        return candidate
+    n = 2
+    while True:
+        candidate = OUTPUT_DIR / f"{slug}_{n}.mp3"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def _write_mp3(text: str, output_path: Path) -> None:
@@ -356,15 +398,15 @@ def _clips() -> list[dict[str, str]]:
     if not OUTPUT_DIR.is_dir():
         return []
     paths = [
-        path for path in OUTPUT_DIR.glob("speech_*.mp3")
-        if _SPEECH_FILE.fullmatch(path.name)
+        path for path in OUTPUT_DIR.glob("*.mp3")
+        if _AUDIO_FILE.fullmatch(path.name)
     ]
-    paths.sort(key=lambda path: path.name, reverse=True)
+    paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return [{"name": path.name, "url": f"/audio/{path.name}"} for path in paths]
 
 
 def _audio_path(name: str):
-    if not _SPEECH_FILE.fullmatch(name):
+    if not _AUDIO_FILE.fullmatch(name):
         return None
     path = (OUTPUT_DIR / name).resolve()
     if path.parent != OUTPUT_DIR.resolve() or not path.is_file():
@@ -404,14 +446,19 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
+            title = payload.get("title", "")
             text = payload.get("text", "")
         except (json.JSONDecodeError, AttributeError):
             self._send_json({"error": "Bad request."}, 400)
             return
-        if not isinstance(text, str):
+        if not isinstance(title, str) or not isinstance(text, str):
             self._send_json({"error": "Bad request."}, 400)
             return
 
+        slug = _snake_case(title)
+        if not slug:
+            self._send_json({"error": "Enter a title first."}, 400)
+            return
         speech = _clean(text)
         if not speech:
             self._send_json({"error": "Enter some text first."}, 400)
@@ -420,7 +467,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "Already generating. Wait for this take to finish."}, 409)
             return
         try:
-            output = _next_output_path()
+            output = _output_path(slug)
             _write_mp3(speech, output)
         except SystemExit as exc:
             self._send_json({"error": str(exc) or "Kokoro produced no audio."}, 500)

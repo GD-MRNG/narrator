@@ -6,16 +6,16 @@ Local page for typing a speech and generating numbered narrated MP3s with [Kokor
 
 ```bash
 brew install espeak-ng ffmpeg
-uv run web.py
+uv run app.py
 ```
 
-UV creates the virtual environment and installs Python dependencies on first run. The project is pinned to Python 3.13. Kokoro’s spaCy model fails on 3.14. Kokoro model weights and voices download from Hugging Face on first use (~300 MB, cached in `~/.cache/huggingface/` after that).
+UV creates the virtual environment and installs Python dependencies on first run. The project is pinned to Python 3.13. Kokoro’s spaCy model fails on 3.14. Kokoro model weights and voices are loaded from the local Hugging Face cache (`~/.cache/huggingface/`). The first run downloads them once (~300 MB); later runs stay offline unless a file is missing.
 
-`uv run web.py` opens a page at `http://127.0.0.1:8765`. Type in the box, press Generate, and the MP3 shows up below with a player. Files are saved as `outputs/speech_0001.mp3`, `outputs/speech_0002.mp3`, and so on. The page is served by the script on this machine.
+`uv run app.py` opens a page at `http://127.0.0.1:8765`. Enter a title and the speech, press Generate, and the MP3 shows up below with a player. The title is saved as a snake_case filename under `outputs/` (for example `Minute 1 — Arriving` → `minute_1_arriving.mp3`). The page is served by the script on this machine.
 
 ## Adjust the voice and speed
 
-Edit the variables at the top of `web.py`:
+Edit the variables at the top of `app.py`:
 
 ```python
 VOICE_PRIMARY   = "af_nicole"  # base voice
