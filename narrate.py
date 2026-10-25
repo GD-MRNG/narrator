@@ -1,15 +1,12 @@
-"""Watch speech.txt and write numbered narrated MP3s.
+"""Synthesize narrated MP3s with Kokoro-82M.
 
-Usage:
-    uv run narrate.py
+Used by web.py. Tune voice and speed via the config below.
 """
 
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
-import sys
 import tempfile
 import wave
 from pathlib import Path
@@ -22,16 +19,15 @@ from kokoro import KPipeline
 # ── Config ────────────────────────────────────────────────────────────────────
 
 KOKORO_REPO     = "hexgrad/Kokoro-82M"
-VOICE_PRIMARY   = "af_bella"   # base voice (American female)
-VOICE_SECONDARY = "am_adam"    # blend voice (American male)
+VOICE_PRIMARY   = "af_nicole"   # base voice (American female)
+VOICE_SECONDARY = "af_heart"    # blend voice (American male)
 VOICE_MIX       = 0.8          # weight of primary; secondary = 1 - VOICE_MIX
-SPEED           = 0.9         # 1.0 normal, higher is faster, lower is slower
+SPEED           = 0.8         # 1.0 normal, higher is faster, lower is slower
 LANG_CODE       = "a"          # 'a' = American English
 SAMPLE_RATE     = 24_000       # Hz — fixed by Kokoro
 DEVICE          = "cpu"
 
 ROOT = Path(__file__).resolve().parent
-INPUT_PATH = ROOT / "speech.txt"
 OUTPUT_DIR = ROOT / "outputs"
 _SPEECH_FILE = re.compile(r"speech_(\d+)\.mp3$")
 
@@ -113,13 +109,6 @@ def _encode_mp3(wav_path: Path, mp3_path: Path) -> None:
     )
 
 
-def _read_speech() -> str | None:
-    """Return cleaned speech, an empty string, or None if the file is missing."""
-    if not INPUT_PATH.is_file():
-        return None
-    return _clean(INPUT_PATH.read_text())
-
-
 def _next_output_path() -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     highest = 0
@@ -141,46 +130,3 @@ def _write_mp3(text: str, output_path: Path) -> None:
     finally:
         wav_path.unlink(missing_ok=True)
     print(f"Wrote {output_path}")
-
-
-def _ask(prompt: str, allowed: set[str]) -> str:
-    labels = ", ".join(sorted(allowed))
-    while True:
-        try:
-            raw = input(f"{prompt} ").strip().lower()
-        except EOFError:
-            print()
-            return "q"
-        if raw in allowed:
-            return raw
-        print(f"  Enter one of: {labels}")
-
-
-def main() -> None:
-    if shutil.which("ffmpeg") is None:
-        print("ffmpeg is required. Install it with: brew install ffmpeg", file=sys.stderr)
-        sys.exit(1)
-
-    print("Narrator. Edit speech.txt between takes. q quits.\n")
-    try:
-        while True:
-            text = _read_speech()
-            if text is None:
-                choice = _ask(f"{INPUT_PATH.name} is missing. [c]heck again, [q]uit?", {"c", "q"})
-            elif not text:
-                choice = _ask(f"{INPUT_PATH.name} is empty. [c]heck again, [q]uit?", {"c", "q"})
-            else:
-                print(f"\n{INPUT_PATH.name} has text.")
-                choice = _ask("Generate the audio? [y]es, [n]o, [q]uit?", {"y", "n", "q"})
-                if choice == "y":
-                    _write_mp3(text, _next_output_path())
-            if choice == "q":
-                break
-    except KeyboardInterrupt:
-        print()
-
-    print("Goodbye.")
-
-
-if __name__ == "__main__":
-    main()
